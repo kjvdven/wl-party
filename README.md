@@ -83,12 +83,15 @@ wl-party rain                 # another effect
 wl-party fireworks -c 600     # more particles (1-5000, default 300)
 wl-party snow -o all          # on every output
 wl-party -o DP-2              # on one output
+wl-party random               # a random effect
+wl-party random snow rain     # a random one of these
 ```
 
 | Command | What it does |
 |---|---|
 | `wl-party [EFFECT]` | Play an effect (default `confetti`) |
 | `wl-party list` | List built-in effects and scripts |
+| `wl-party random [NAMES...]` | Play a random effect, from `NAMES` or from everything in `list` |
 | `wl-party new <name>` | Create a starter script |
 | `wl-party check <name\|file.rhai>` | Run a script headless and report errors |
 | `wl-party doctor` | Check the compositor, the effects directory and every script |
