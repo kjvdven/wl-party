@@ -259,3 +259,68 @@ fn build(name: &str, count: usize) -> Result<Build, Box<dyn Error>> {
         Rc::clone(&script).into_effect(size, count)
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+
+    fn temp_script(name: &str, source: &str) -> PathBuf {
+        let path = env::temp_dir().join(format!("wl-party-{name}-{}.rhai", std::process::id()));
+        fs::write(&path, source).unwrap();
+        path
+    }
+
+    #[test]
+    fn example_scripts_finish() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts");
+        let mut checked = 0;
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            fastrand::seed(1);
+            if let Err(err) = simulate(&path, DEFAULT_COUNT.into()) {
+                panic!("{}: {err}", path.display());
+            }
+            checked += 1;
+        }
+        assert!(checked >= 4);
+    }
+
+    #[test]
+    fn same_seed_same_run() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/snow.rhai");
+        let run = || {
+            fastrand::seed(7);
+            simulate(&path, DEFAULT_COUNT.into()).unwrap()
+        };
+        assert_eq!(run(), run());
+    }
+
+    #[test]
+    fn effects_that_never_end_fail() {
+        let path = temp_script(
+            "forever",
+            "fn start(ctx) { ctx.gravity = 0.0; ctx.emit(#{ x: 100.0, y: 100.0 }); }",
+        );
+        let result = simulate(&path, 1);
+        fs::remove_file(&path).unwrap();
+        assert!(result.unwrap_err().to_string().contains("still running"));
+    }
+
+    #[test]
+    fn errors_in_expire_are_reported() {
+        let path = temp_script(
+            "expire",
+            r#"fn start(ctx) { ctx.emit(#{ fuse: 0.1 }); } fn expire(ctx, p) { ctx.emit(#{ color: "red" }); }"#,
+        );
+        let result = simulate(&path, 1);
+        fs::remove_file(&path).unwrap();
+        assert!(result.unwrap_err().to_string().contains("expire"));
+    }
+
+    #[test]
+    fn cli_definition_is_valid() {
+        Cli::command().debug_assert();
+    }
+}

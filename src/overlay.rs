@@ -452,3 +452,26 @@ impl ProvidesRegistryState for Overlay {
 
 delegate_registry!(Overlay);
 smithay_client_toolkit::delegate_dispatch2!(Overlay);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clear_zeroes_only_the_area() {
+        let (width, height) = (4, 3);
+        let mut canvas = vec![0xff; width * height * 4];
+        let area = Area {
+            left: 1,
+            top: 1,
+            right: 3,
+            bottom: 2,
+        };
+        clear(&mut canvas, 4, area);
+        for (index, pixel) in canvas.as_chunks::<4>().0.iter().enumerate() {
+            let (x, y) = (index % width, index / width);
+            let inside = (1..3).contains(&x) && y == 1;
+            assert_eq!(*pixel == [0; 4], inside, "pixel {x},{y}");
+        }
+    }
+}

@@ -215,3 +215,49 @@ impl Swarm {
         self.particles.is_empty()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SIZE: Size = Size {
+        width: 800.0,
+        height: 600.0,
+    };
+
+    fn at(x: f32, y: f32, vx: f32, vy: f32) -> Particle {
+        Particle::new(x, y, vx, vy)
+    }
+
+    #[test]
+    fn gone_once_past_an_edge_and_moving_away() {
+        assert!(at(400.0, 700.0, 0.0, 10.0).is_gone(SIZE, 100.0));
+        assert!(at(-100.0, 300.0, -10.0, 0.0).is_gone(SIZE, 100.0));
+        assert!(at(900.0, 300.0, 10.0, 0.0).is_gone(SIZE, 100.0));
+    }
+
+    #[test]
+    fn kept_while_coming_back() {
+        assert!(!at(400.0, 700.0, 0.0, -10.0).is_gone(SIZE, 100.0));
+        assert!(!at(-100.0, 300.0, 10.0, 0.0).is_gone(SIZE, 100.0));
+        assert!(!at(400.0, 300.0, 0.0, 10.0).is_gone(SIZE, 100.0));
+    }
+
+    #[test]
+    fn above_the_top_depends_on_gravity() {
+        let rising = at(400.0, -100.0, 0.0, -10.0);
+        assert!(!rising.is_gone(SIZE, 100.0), "gravity pulls it back down");
+        assert!(rising.is_gone(SIZE, -100.0), "a balloon never comes back");
+    }
+
+    #[test]
+    fn expired_particles_move_to_expired() {
+        let mut swarm = Swarm::new(2, 0.0, 0.0);
+        let mut short = at(100.0, 100.0, 0.0, 0.0);
+        short.fuse = 0.01;
+        swarm.particles.extend([short, at(200.0, 100.0, 0.0, 0.0)]);
+        swarm.update(0.1, SIZE);
+        assert_eq!(swarm.particles.len(), 1);
+        assert_eq!(swarm.expired.len(), 1);
+    }
+}
