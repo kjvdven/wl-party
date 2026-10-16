@@ -45,6 +45,14 @@ enum Command {
     },
     /// Check the compositor, the effects directory and every script.
     Doctor,
+    /// Play a random effect, from the given names or from everything in `list`.
+    Random {
+        /// Effects to choose from.
+        names: Vec<String>,
+
+        #[command(flatten)]
+        show: Show,
+    },
 }
 
 /// Options shared by playing and checking.
@@ -76,6 +84,13 @@ struct Play {
     effect: String,
 
     #[command(flatten)]
+    show: Show,
+}
+
+/// Options for playing an effect on screen.
+#[derive(Args)]
+struct Show {
+    #[command(flatten)]
     sim: Sim,
 
     /// Output to play on, e.g. `DP-1`, or `all`. Default: the compositor picks one.
@@ -97,7 +112,8 @@ fn main() -> ExitCode {
         Some(Command::New { name }) => new(&name),
         Some(Command::Check { script, sim }) => check(&script, sim.prepare()),
         Some(Command::Doctor) => doctor(),
-        None => play(&cli.play),
+        Some(Command::Random { names, show }) => random(&names, &show),
+        None => play(&cli.play.effect, &cli.play.show),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -115,6 +131,15 @@ fn list() {
     for (name, about) in script::list() {
         println!("{name:<10} {about} (script)");
     }
+    println!("{:<10} A random effect from this list", "random");
+}
+
+/// Every effect name `list` shows, built-ins first.
+fn names() -> Vec<String> {
+    let builtin = effect::REGISTRY.iter().map(|spec| spec.name.to_owned());
+    builtin
+        .chain(script::list().into_iter().map(|(name, _)| name))
+        .collect()
 }
 
 fn new(name: &str) -> Result<(), Box<dyn Error>> {
@@ -239,9 +264,34 @@ fn finish(healthy: bool) -> Result<(), Box<dyn Error>> {
     }
 }
 
-fn play(play: &Play) -> Result<(), Box<dyn Error>> {
-    let build = build(&play.effect, play.sim.prepare())?;
-    overlay::run(build, play.output.as_deref(), play.stats)
+fn play(name: &str, show: &Show) -> Result<(), Box<dyn Error>> {
+    let count = show.sim.prepare();
+    overlay::run(build(name, count)?, show.output.as_deref(), show.stats)
+}
+
+fn random(names: &[String], show: &Show) -> Result<(), Box<dyn Error>> {
+    // Seed before picking, so `--seed` repeats the choice too.
+    let count = show.sim.prepare();
+    let name = pick(names)?;
+    overlay::run(build(&name, count)?, show.output.as_deref(), show.stats)
+}
+
+/// One of `names`, or of every effect when empty. Checks all names first, so a typo
+/// fails every time instead of only when it happens to be picked.
+fn pick(names: &[String]) -> Result<String, Box<dyn Error>> {
+    let names = if names.is_empty() {
+        self::names()
+    } else {
+        names.to_vec()
+    };
+    for name in &names {
+        let known =
+            effect::find(name).is_some() || script::path(name).is_some_and(|path| path.is_file());
+        if !known {
+            return Err(format!("unknown effect '{name}', see `wl-party list`").into());
+        }
+    }
+    Ok(names[fastrand::usize(..names.len())].clone())
 }
 
 /// Built-in effects win over scripts with the same name.
@@ -317,6 +367,39 @@ mod tests {
         let result = simulate(&path, 1);
         fs::remove_file(&path).unwrap();
         assert!(result.unwrap_err().to_string().contains("expire"));
+    }
+
+    #[test]
+    fn pick_chooses_from_the_given_names() {
+        let names = ["confetti".to_owned(), "rain".to_owned()];
+        for _ in 0..20 {
+            assert!(names.contains(&pick(&names).unwrap()));
+        }
+    }
+
+    #[test]
+    fn pick_from_everything_includes_built_ins() {
+        let all = names();
+        assert!(all.iter().any(|name| name == "confetti"));
+        assert!(all.contains(&pick(&[]).unwrap()));
+    }
+
+    #[test]
+    fn pick_rejects_unknown_names_even_if_not_picked() {
+        let names = ["confetti".to_owned(), "nope".to_owned()];
+        for _ in 0..5 {
+            assert!(pick(&names).unwrap_err().to_string().contains("'nope'"));
+        }
+    }
+
+    #[test]
+    fn pick_repeats_with_the_same_seed() {
+        let names: Vec<String> = ["confetti", "rain"].map(String::from).to_vec();
+        let run = || {
+            fastrand::seed(9);
+            (0..10).map(|_| pick(&names).unwrap()).collect::<Vec<_>>()
+        };
+        assert_eq!(run(), run());
     }
 
     #[test]
