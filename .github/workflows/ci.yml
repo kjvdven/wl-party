@@ -17,7 +17,8 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: cargo fmt --check
-      - run: cargo clippy --locked -- -W clippy::pedantic -D warnings
+      - run: cargo clippy --all-targets --locked -- -W clippy::pedantic -D warnings
+      - run: cargo test --locked
       - run: cargo build --locked
       # Headless: catches broken example scripts without a compositor.
       - name: Check example scripts

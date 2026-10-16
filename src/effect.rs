@@ -78,3 +78,42 @@ pub const REGISTRY: &[Spec] = &[effects::confetti::SPEC, effects::rain::SPEC];
 pub fn find(name: &str) -> Option<&'static Spec> {
     REGISTRY.iter().find(|spec| spec.name == name)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const fn area(left: u32, top: u32, right: u32, bottom: u32) -> Area {
+        Area {
+            left,
+            top,
+            right,
+            bottom,
+        }
+    }
+
+    fn corners(area: Area) -> [u32; 4] {
+        [area.left, area.top, area.right, area.bottom]
+    }
+
+    #[test]
+    fn empty_areas() {
+        assert!(Area::default().is_empty());
+        assert!(area(5, 0, 5, 10).is_empty());
+        assert!(area(0, 5, 10, 5).is_empty());
+        assert!(!area(0, 0, 1, 1).is_empty());
+    }
+
+    #[test]
+    fn union_covers_both() {
+        let union = area(10, 10, 20, 20).union(area(15, 5, 30, 12));
+        assert_eq!(corners(union), [10, 5, 30, 20]);
+    }
+
+    #[test]
+    fn union_ignores_empty_areas() {
+        let some = area(10, 10, 20, 20);
+        assert_eq!(corners(some.union(Area::default())), corners(some));
+        assert_eq!(corners(Area::default().union(some)), corners(some));
+    }
+}

@@ -104,8 +104,12 @@ impl Script {
         if fs::metadata(path)?.len() > MAX_SCRIPT_BYTES {
             return Err(format!("script is larger than {MAX_SCRIPT_BYTES} bytes").into());
         }
+        Self::compile(&fs::read_to_string(path)?)
+    }
+
+    pub fn compile(source: &str) -> Result<Self, Box<dyn Error>> {
         let engine = engine();
-        let ast = engine.compile(fs::read_to_string(path)?)?;
+        let ast = engine.compile(source)?;
         Ok(Self { engine, ast })
     }
 
@@ -411,5 +415,129 @@ impl Effect for Running {
 
     fn particles(&self) -> usize {
         self.swarm.particles.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SIZE: Size = Size {
+        width: 800.0,
+        height: 600.0,
+    };
+
+    fn run(source: &str) -> Result<Box<dyn Effect>, Box<dyn Error>> {
+        let mut effect = Rc::new(Script::compile(source)?).into_effect(SIZE, 300);
+        effect.update(1.0 / 60.0)?;
+        Ok(effect)
+    }
+
+    fn error(source: &str) -> String {
+        run(source).err().expect("script should fail").to_string()
+    }
+
+    #[test]
+    fn path_rejects_names_that_escape_the_effects_dir() {
+        for name in ["", "../x", "a/b", "a.b", "..", "snow flake", "sneeuw❄"] {
+            assert!(path(name).is_none(), "{name:?} should be rejected");
+        }
+        let path = path("snow-2_x").expect("valid name");
+        assert!(path.ends_with("wl-party/effects/snow-2_x.rhai"));
+    }
+
+    #[test]
+    fn parse_color_accepts_only_rrggbb() {
+        assert_eq!(parse_color("#ff4d6d").unwrap(), [0xff, 0x4d, 0x6d]);
+        assert_eq!(parse_color("#FFFFFF").unwrap(), [0xff, 0xff, 0xff]);
+        for bad in [
+            "red",
+            "#fff",
+            "ff4d6d",
+            "#gggggg",
+            "#+fffff",
+            "#ff4d6d00",
+            "#ffé4d",
+        ] {
+            assert!(parse_color(bad).is_err(), "{bad:?} should be rejected");
+        }
+    }
+
+    #[test]
+    fn particles_are_capped() {
+        let effect =
+            run("fn start(ctx) { for i in 0..10000 { ctx.emit(#{ y: 10.0 }); } }").unwrap();
+        assert_eq!(effect.particles(), MAX_PARTICLES);
+    }
+
+    #[test]
+    fn bursts_are_capped() {
+        let effect = run("fn start(ctx) { ctx.burst(10.0, 10.0, 1000000); }").unwrap();
+        assert_eq!(effect.particles(), MAX_PARTICLES);
+    }
+
+    #[test]
+    fn shapes_are_capped() {
+        let source = r#"fn start(ctx) { for i in 1..100 { ctx.emit(#{ shape: "M0 0 L" + i + " 1 L0 1 Z" }); } }"#;
+        assert!(error(source).contains("more than 64 shapes"));
+    }
+
+    #[test]
+    fn tags_beyond_the_cap_fall_back_to_the_empty_tag() {
+        let mut state = State {
+            spawned: Vec::new(),
+            tags: vec![ImmutableString::new()],
+            shape_keys: Vec::new(),
+            new_shapes: Vec::new(),
+            gravity: 0.0,
+            drag: 0.0,
+        };
+        for i in 1..MAX_TAGS {
+            assert_eq!(usize::from(state.intern(i.to_string().into())), i);
+        }
+        assert_eq!(state.intern("one too many".into()), 0);
+        assert_eq!(state.intern("1".into()), 1);
+    }
+
+    #[test]
+    fn endless_loops_are_stopped() {
+        assert!(error("fn start(ctx) { loop {} }").contains("Too many operations"));
+    }
+
+    #[test]
+    fn eval_is_disabled() {
+        assert!(Script::compile(r#"fn start(ctx) { eval("1") }"#).is_err());
+    }
+
+    #[test]
+    fn bad_input_reports_the_problem() {
+        assert!(
+            error(r#"fn start(ctx) { ctx.emit(#{ color: "red" }); }"#).contains("invalid color")
+        );
+        assert!(
+            error(r#"fn start(ctx) { ctx.emit(#{ shape: "nonsense" }); }"#)
+                .contains("invalid shape")
+        );
+    }
+
+    #[test]
+    fn hooks_see_top_level_constants() {
+        let source = r#"
+            const SPEED = 50.0;
+            fn start(ctx) { ctx.emit(#{ y: 10.0, vy: SPEED, fuse: 0.01, tag: "a" }); }
+            fn expire(ctx, p) { ctx.emit(#{ y: p.y, vy: SPEED }); }
+        "#;
+        let mut effect = run(source).unwrap();
+        effect.update(1.0 / 60.0).unwrap();
+        assert_eq!(effect.particles(), 1);
+    }
+
+    #[test]
+    fn oversized_scripts_are_refused() {
+        let path = env::temp_dir().join(format!("wl-party-test-{}.rhai", std::process::id()));
+        fs::write(&path, "// x\n".repeat(20_000)).unwrap();
+        let result = Script::load(&path);
+        fs::remove_file(&path).unwrap();
+        assert!(result.err().unwrap().to_string().contains("larger than"));
     }
 }

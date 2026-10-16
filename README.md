@@ -10,7 +10,7 @@ load at runtime, no recompiling needed.
 
 - A compositor with `zwlr_layer_shell_v1`: niri, Sway, Hyprland, river, KDE, and others.
   GNOME doesn't support it.
-- Rust 1.85+ to build. No system libraries needed: everything is pure Rust.
+- Rust 1.88+ to build. No system libraries needed: everything is pure Rust.
 
 ## Install
 
