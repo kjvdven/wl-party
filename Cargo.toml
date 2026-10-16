@@ -1,0 +1,21 @@
+[package]
+name = "wl-party"
+version = "0.1.0"
+edition = "2024"
+description = "Click-through confetti overlay for Wayland compositors"
+license = "MIT"
+
+[dependencies]
+clap = { version = "4.6.7", features = ["derive"] }
+fastrand = "2.5.0"
+rhai = { version = "1.26.1", features = ["f32_float", "no_module", "no_custom_syntax"] }
+smithay-client-toolkit = { version = "0.21.1", default-features = false }
+svgtypes = "0.16.1"
+tiny-skia = { version = "0.12.0", default-features = false, features = ["std", "simd"] }
+wayland-client = "0.31.15"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
