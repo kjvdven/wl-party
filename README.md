@@ -45,6 +45,8 @@ environment.systemPackages = [
 
 ### From source
 
+With [mise](https://mise.jdx.dev), `mise install` sets up the Rust toolchain from `mise.toml`.
+
 ```sh
 cargo install --path .
 ```
