@@ -14,6 +14,17 @@ load at runtime, no recompiling needed.
 
 ## Install
 
+Download a static binary from the [latest release](../../releases/latest); it runs on any
+Linux distro (`x86_64` and `aarch64`):
+
+```sh
+curl -LO https://github.com/kjvdven/wl-party/releases/latest/download/wl-party-x86_64-linux
+sha256sum -c <(curl -L https://github.com/kjvdven/wl-party/releases/latest/download/wl-party-x86_64-linux.sha256)
+install -Dm755 wl-party-x86_64-linux ~/.local/bin/wl-party
+```
+
+Or build from source:
+
 ```sh
 cargo install --path .
 ```
@@ -214,6 +225,17 @@ and 64 shapes are live at a time; scripts are at most 64 KB.
 Built-in effects are Rust, for when a script isn't enough: add a file in `src/effects/`
 that implements the `Effect` trait (`src/effect.rs`) and add its `SPEC` to `REGISTRY`.
 `src/effects/rain.rs` is a small example.
+
+## Releasing
+
+Bump `version` in `Cargo.toml`, merge to `main`, then tag it:
+
+```sh
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+The release workflow builds the static binaries and publishes them with checksums.
 
 ## License
 
