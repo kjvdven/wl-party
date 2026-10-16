@@ -23,7 +23,27 @@ sha256sum -c <(curl -L https://github.com/kjvdven/wl-party/releases/latest/downl
 install -Dm755 wl-party-x86_64-linux ~/.local/bin/wl-party
 ```
 
-Or build from source:
+### NixOS
+
+Try it without installing:
+
+```sh
+nix run github:kjvdven/wl-party
+```
+
+Or add it to your flake-based config:
+
+```nix
+# flake.nix
+inputs.wl-party.url = "github:kjvdven/wl-party";
+
+# configuration.nix (with inputs passed through specialArgs)
+environment.systemPackages = [
+  inputs.wl-party.packages.${pkgs.stdenv.hostPlatform.system}.default
+];
+```
+
+### From source
 
 ```sh
 cargo install --path .

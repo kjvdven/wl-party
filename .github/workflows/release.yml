@@ -21,7 +21,7 @@ jobs:
       TARGET: ${{ matrix.arch }}-unknown-linux-musl
       ASSET: wl-party-${{ matrix.arch }}-linux
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ env.TARGET }}
@@ -31,7 +31,7 @@ jobs:
         run: |
           cp "target/$TARGET/release/wl-party" "$ASSET"
           sha256sum "$ASSET" > "$ASSET.sha256"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ env.ASSET }}
           path: ${{ env.ASSET }}*
@@ -42,10 +42,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           merge-multiple: true
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: wl-party-*
           generate_release_notes: true
