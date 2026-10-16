@@ -210,6 +210,7 @@ The effect ends when no particles are left. An effect that is still running afte
 | `shape` | `"rect"` | `"rect"`, `"circle"` or SVG path data |
 | `size` | random confetti / `16` | Pixels, 1-512 |
 | `color` | random confetti color | `"#rrggbb"` |
+| `shadow` | none | `"#rrggbb"`: a translucent copy behind it, so light particles show on light backgrounds |
 | `spin` | `true` | `false` keeps it upright and flat |
 | `wobble` | `0` | Sideways sway in pixels |
 | `tag` | `""` | Any string, handed back to `expire` |
@@ -220,9 +221,21 @@ Any SVG path works as a shape: copy the `d="..."` attribute from an SVG file (or
 icon set) and pass it as `shape`. It is centered and scaled to fit `size`, so the
 original coordinates don't matter. Shapes are filled with a single color.
 
+Custom shapes up to 128 px are rendered once per size and color and then reused, so
+detailed paths cost about the same as a circle.
+
 ```rhai
 const HEART = "M12 21 C12 21 3 14 3 8 A4.5 4.5 0 0 1 12 6 A4.5 4.5 0 0 1 21 8 C21 14 12 21 12 21 Z";
 ctx.emit(#{ shape: HEART, size: 40, color: "#ff4d6d", spin: false });
+```
+
+### Shadows
+
+White or pale particles disappear on a light background. `shadow` draws a translucent
+copy (35% opacity) behind the particle, shifted down and right by 8% of its size:
+
+```rhai
+ctx.emit(#{ shape: "circle", size: 12, color: "#ffffff", shadow: "#2b4a6b" });
 ```
 
 ### Examples

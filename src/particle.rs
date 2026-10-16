@@ -1,6 +1,11 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::f32::consts::TAU;
 
-use tiny_skia::{Color, FillRule, Paint, Path, PathBuilder, PixmapMut, Rect, Transform};
+use tiny_skia::{
+    Color, FillRule, FilterQuality, Paint, Path, PathBuilder, Pixmap, PixmapMut, PixmapPaint, Rect,
+    Transform,
+};
 
 use crate::effect::{Area, Size};
 
@@ -23,6 +28,12 @@ const PALETTE: [[u8; 3]; 8] = [
 
 /// Seconds before its fuse runs out that a particle starts fading.
 const FADE_TIME: f32 = 0.4;
+const SHADOW_ALPHA: u8 = 90;
+/// Shadow offset as a fraction of the particle's size.
+const SHADOW_OFFSET: f32 = 0.08;
+/// Sprite cache bounds: at most 256 sprites of up to 128 px, about 17 MB.
+const MAX_SPRITES: usize = 256;
+const MAX_SPRITE_SIZE: f32 = 128.0;
 
 #[derive(Clone, Copy)]
 pub struct Particle {
@@ -46,6 +57,7 @@ pub struct Particle {
     width: f32,
     height: f32,
     color: Color,
+    shadow: Option<Color>,
 }
 
 impl Particle {
@@ -69,6 +81,7 @@ impl Particle {
             width: 8.0 + fastrand::f32() * 6.0,
             height: 4.0 + fastrand::f32() * 4.0,
             color: Color::from_rgba8(red, green, blue, 255),
+            shadow: None,
         }
     }
 
@@ -80,6 +93,12 @@ impl Particle {
     pub fn set_color(&mut self, [red, green, blue]: [u8; 3]) {
         let [first, second, third] = bgr(red, green, blue);
         self.color = Color::from_rgba8(first, second, third, 255);
+    }
+
+    /// A translucent copy drawn behind the particle, offset down and right.
+    pub fn set_shadow(&mut self, [red, green, blue]: [u8; 3]) {
+        let [first, second, third] = bgr(red, green, blue);
+        self.shadow = Some(Color::from_rgba8(first, second, third, SHADOW_ALPHA));
     }
 
     /// Keeps the particle upright and flat, e.g. for balloons.
@@ -126,6 +145,68 @@ pub struct Swarm {
     pub drag: f32,
     /// Shapes centered on the origin and fitting a 1x1 box; index 0 is the unit square.
     pub shapes: Vec<Path>,
+    /// Custom shapes pre-rendered per size and color; rasterizing a complex path every frame is slow.
+    sprites: RefCell<HashMap<SpriteKey, Sprite>>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct SpriteKey {
+    shape: u16,
+    width: u16,
+    height: u16,
+    color: [u8; 4],
+    shadow: Option<[u8; 4]>,
+}
+
+impl SpriteKey {
+    fn of(particle: &Particle) -> Self {
+        let rgba = |color: Color| {
+            let color = color.to_color_u8();
+            [color.red(), color.green(), color.blue(), color.alpha()]
+        };
+        // Sizes are capped at MAX_SPRITE_SIZE before a key is made, so they fit u16.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let px = |size: f32| size.round().max(1.0) as u16;
+        Self {
+            shape: particle.shape,
+            width: px(particle.width),
+            height: px(particle.height),
+            color: rgba(particle.color),
+            shadow: particle.shadow.map(rgba),
+        }
+    }
+}
+
+/// A shape and its shadow rendered upright around `center`.
+struct Sprite {
+    pixmap: Pixmap,
+    center: f32,
+}
+
+impl Sprite {
+    fn render(shape: &Path, key: SpriteKey, color: Color, shadow: Option<Color>) -> Option<Self> {
+        let (width, height) = (f32::from(key.width), f32::from(key.height));
+        let extent = width.max(height);
+        let offset = shadow.map_or(0.0, |_| (extent * SHADOW_OFFSET).max(1.0));
+        let center = (extent / 2.0 + 1.0).ceil();
+        // Fits in u32: extent is at most MAX_SPRITE_SIZE.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let side = (center * 2.0 + offset).ceil() as u32;
+        let mut pixmap = Pixmap::new(side, side)?;
+        let mut paint = Paint {
+            anti_alias: true,
+            ..Paint::default()
+        };
+        let transform = Transform::from_row(width, 0.0, 0.0, height, center, center);
+        if let Some(shadow) = shadow {
+            paint.set_color(shadow);
+            let shifted = transform.post_translate(offset, offset);
+            pixmap.fill_path(shape, &paint, FillRule::Winding, shifted, None);
+        }
+        paint.set_color(color);
+        pixmap.fill_path(shape, &paint, FillRule::Winding, transform, None);
+        Some(Self { pixmap, center })
+    }
 }
 
 impl Swarm {
@@ -137,6 +218,7 @@ impl Swarm {
             gravity,
             drag,
             shapes: vec![PathBuilder::from_rect(unit)],
+            sprites: RefCell::default(),
         }
     }
 
@@ -169,8 +251,12 @@ impl Swarm {
             let (sway, tilt) = particle.wobble_phase.sin_cos();
             let x = particle.x + sway * particle.wobble;
             let y = particle.y;
-            // Half the diagonal of the particle's box, plus a pixel of anti-aliasing.
-            let reach = particle.width.max(particle.height) * 0.75 + 1.0;
+            let extent = particle.width.max(particle.height);
+            let offset = particle
+                .shadow
+                .map_or(0.0, |_| (extent * SHADOW_OFFSET).max(1.0));
+            // Half the diagonal of the particle's box, plus its shadow and a pixel of anti-aliasing.
+            let reach = extent * 0.75 + offset + 1.0;
             if x + reach < 0.0
                 || y + reach < 0.0
                 || x - reach > canvas_width
@@ -183,21 +269,37 @@ impl Swarm {
             right = right.max(x + reach);
             bottom = bottom.max(y + reach);
 
-            let mut color = particle.color;
-            color.apply_opacity(particle.fuse / FADE_TIME);
-            paint.set_color(color);
-            // scale -> rotate -> translate in one matrix; cos(flip) gives the paper-tumble look.
             // A slight tilt with the sway, like a balloon pulled by its string.
             let angle = particle.angle + tilt * (particle.wobble * 0.01).min(0.2);
             let (sin, cos) = angle.sin_cos();
-            let width = particle.width;
-            let height = particle.height * particle.flip.cos();
-            let transform =
-                Transform::from_row(width * cos, width * sin, -height * sin, height * cos, x, y);
+            let flip = particle.flip.cos();
+            let fade = particle.fuse / FADE_TIME;
             let shape = self
                 .shapes
                 .get(usize::from(particle.shape))
                 .unwrap_or(&self.shapes[0]);
+            if particle.shape != 0 && extent <= MAX_SPRITE_SIZE {
+                // rotate -> squash by flip -> translate, around the sprite's center.
+                let transform = Transform::from_row(cos, sin, -sin * flip, cos * flip, x, y);
+                if self.draw_sprite(canvas, particle, shape, transform, fade) {
+                    continue;
+                }
+            }
+
+            // scale -> rotate -> translate in one matrix; cos(flip) gives the paper-tumble look.
+            let width = particle.width;
+            let height = particle.height * flip;
+            let transform =
+                Transform::from_row(width * cos, width * sin, -height * sin, height * cos, x, y);
+            if let Some(mut shadow) = particle.shadow {
+                shadow.apply_opacity(fade);
+                paint.set_color(shadow);
+                let shifted = transform.post_translate(offset, offset);
+                canvas.fill_path(shape, &paint, FillRule::Winding, shifted, None);
+            }
+            let mut color = particle.color;
+            color.apply_opacity(fade);
+            paint.set_color(color);
             canvas.fill_path(shape, &paint, FillRule::Winding, transform, None);
         }
         // Clamped to the canvas first, so the casts can't truncate or wrap.
@@ -209,6 +311,37 @@ impl Swarm {
             right: px(right.ceil(), canvas_width),
             bottom: px(bottom.ceil(), canvas_height),
         }
+    }
+
+    /// Draws the particle from its cached sprite; `false` if the cache is full.
+    fn draw_sprite(
+        &self,
+        canvas: &mut PixmapMut,
+        particle: &Particle,
+        shape: &Path,
+        transform: Transform,
+        fade: f32,
+    ) -> bool {
+        let key = SpriteKey::of(particle);
+        let mut sprites = self.sprites.borrow_mut();
+        if !sprites.contains_key(&key) {
+            if sprites.len() >= MAX_SPRITES {
+                return false;
+            }
+            let Some(sprite) = Sprite::render(shape, key, particle.color, particle.shadow) else {
+                return false;
+            };
+            sprites.insert(key, sprite);
+        }
+        let sprite = &sprites[&key];
+        let paint = PixmapPaint {
+            opacity: fade.clamp(0.0, 1.0),
+            quality: FilterQuality::Bilinear,
+            ..PixmapPaint::default()
+        };
+        let transform = transform.pre_translate(-sprite.center, -sprite.center);
+        canvas.draw_pixmap(0, 0, sprite.pixmap.as_ref(), &paint, transform, None);
+        true
     }
 
     pub fn is_empty(&self) -> bool {
