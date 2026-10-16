@@ -16,6 +16,7 @@
 //       shape                 "rect" (default), "circle" or SVG path data ("M0 0 L10 0 ...")
 //       size                  pixels, 1-512
 //       color                 "#rrggbb", default is a random confetti color
+//       shadow                "#rrggbb", a soft copy behind it so it shows on light backgrounds
 //       spin                  false keeps it upright
 //       wobble                sideways sway in pixels
 //       tag                   any string, handed back to expire

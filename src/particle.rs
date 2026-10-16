@@ -23,6 +23,9 @@ const PALETTE: [[u8; 3]; 8] = [
 
 /// Seconds before its fuse runs out that a particle starts fading.
 const FADE_TIME: f32 = 0.4;
+const SHADOW_ALPHA: u8 = 90;
+/// Shadow offset as a fraction of the particle's size.
+const SHADOW_OFFSET: f32 = 0.08;
 
 #[derive(Clone, Copy)]
 pub struct Particle {
@@ -46,6 +49,7 @@ pub struct Particle {
     width: f32,
     height: f32,
     color: Color,
+    shadow: Option<Color>,
 }
 
 impl Particle {
@@ -69,6 +73,7 @@ impl Particle {
             width: 8.0 + fastrand::f32() * 6.0,
             height: 4.0 + fastrand::f32() * 4.0,
             color: Color::from_rgba8(red, green, blue, 255),
+            shadow: None,
         }
     }
 
@@ -80,6 +85,12 @@ impl Particle {
     pub fn set_color(&mut self, [red, green, blue]: [u8; 3]) {
         let [first, second, third] = bgr(red, green, blue);
         self.color = Color::from_rgba8(first, second, third, 255);
+    }
+
+    /// A translucent copy drawn behind the particle, offset down and right.
+    pub fn set_shadow(&mut self, [red, green, blue]: [u8; 3]) {
+        let [first, second, third] = bgr(red, green, blue);
+        self.shadow = Some(Color::from_rgba8(first, second, third, SHADOW_ALPHA));
     }
 
     /// Keeps the particle upright and flat, e.g. for balloons.
@@ -169,8 +180,12 @@ impl Swarm {
             let (sway, tilt) = particle.wobble_phase.sin_cos();
             let x = particle.x + sway * particle.wobble;
             let y = particle.y;
-            // Half the diagonal of the particle's box, plus a pixel of anti-aliasing.
-            let reach = particle.width.max(particle.height) * 0.75 + 1.0;
+            let extent = particle.width.max(particle.height);
+            let offset = particle
+                .shadow
+                .map_or(0.0, |_| (extent * SHADOW_OFFSET).max(1.0));
+            // Half the diagonal of the particle's box, plus its shadow and a pixel of anti-aliasing.
+            let reach = extent * 0.75 + offset + 1.0;
             if x + reach < 0.0
                 || y + reach < 0.0
                 || x - reach > canvas_width
@@ -183,9 +198,6 @@ impl Swarm {
             right = right.max(x + reach);
             bottom = bottom.max(y + reach);
 
-            let mut color = particle.color;
-            color.apply_opacity(particle.fuse / FADE_TIME);
-            paint.set_color(color);
             // scale -> rotate -> translate in one matrix; cos(flip) gives the paper-tumble look.
             // A slight tilt with the sway, like a balloon pulled by its string.
             let angle = particle.angle + tilt * (particle.wobble * 0.01).min(0.2);
@@ -198,6 +210,16 @@ impl Swarm {
                 .shapes
                 .get(usize::from(particle.shape))
                 .unwrap_or(&self.shapes[0]);
+            let fade = particle.fuse / FADE_TIME;
+            if let Some(mut shadow) = particle.shadow {
+                shadow.apply_opacity(fade);
+                paint.set_color(shadow);
+                let shifted = transform.post_translate(offset, offset);
+                canvas.fill_path(shape, &paint, FillRule::Winding, shifted, None);
+            }
+            let mut color = particle.color;
+            color.apply_opacity(fade);
+            paint.set_color(color);
             canvas.fill_path(shape, &paint, FillRule::Winding, transform, None);
         }
         // Clamped to the canvas first, so the casts can't truncate or wrap.

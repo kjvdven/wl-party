@@ -288,6 +288,9 @@ impl Ctx {
         if let Some(color) = text("color") {
             particle.set_color(parse_color(&color)?);
         }
+        if let Some(shadow) = text("shadow") {
+            particle.set_shadow(parse_color(&shadow)?);
+        }
         let mut state = self.state.borrow_mut();
         if let Some(shape) = shape {
             particle.shape = state.shape(shape)?;
@@ -517,6 +520,9 @@ mod tests {
         assert!(
             error(r#"fn start(ctx) { ctx.emit(#{ shape: "nonsense" }); }"#)
                 .contains("invalid shape")
+        );
+        assert!(
+            error(r#"fn start(ctx) { ctx.emit(#{ shadow: "grey" }); }"#).contains("invalid color")
         );
     }
 

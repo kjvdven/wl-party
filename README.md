@@ -210,6 +210,7 @@ The effect ends when no particles are left. An effect that is still running afte
 | `shape` | `"rect"` | `"rect"`, `"circle"` or SVG path data |
 | `size` | random confetti / `16` | Pixels, 1-512 |
 | `color` | random confetti color | `"#rrggbb"` |
+| `shadow` | none | `"#rrggbb"`: a translucent copy behind it, so light particles show on light backgrounds |
 | `spin` | `true` | `false` keeps it upright and flat |
 | `wobble` | `0` | Sideways sway in pixels |
 | `tag` | `""` | Any string, handed back to `expire` |
