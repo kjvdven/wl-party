@@ -15,10 +15,11 @@
 //       fuse                  seconds until it expires and fades out
 //       shape                 "rect" (default), "circle" or SVG path data ("M0 0 L10 0 ...")
 //       size                  pixels, 1-512
-//       color                 "#rrggbb", default is a random confetti color
-//       shadow                "#rrggbb", a soft copy behind it so it shows on light backgrounds
+//       color                 "#rrggbb" or "#rrggbbaa" with transparency, default is a random confetti color
+//       shadow                "#rrggbb" or "#rrggbbaa", a soft copy behind it so it shows on light backgrounds
 //       spin                  false keeps it upright
 //       wobble                sideways sway in pixels
+//       gloss                 true adds a light highlight in the top left, like on a balloon
 //       tag                   any string, handed back to expire
 //   ctx.burst(x, y, n)        n sparks in all directions, optional 4th argument: color
 //   rand()                    random number between 0 and 1

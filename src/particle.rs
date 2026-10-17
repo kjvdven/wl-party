@@ -15,6 +15,11 @@ const fn bgr(r: u8, g: u8, b: u8) -> [u8; 3] {
     [b, g, r]
 }
 
+fn color([red, green, blue, alpha]: [u8; 4]) -> Color {
+    let [first, second, third] = bgr(red, green, blue);
+    Color::from_rgba8(first, second, third, alpha)
+}
+
 const PALETTE: [[u8; 3]; 8] = [
     bgr(0xff, 0x4d, 0x6d),
     bgr(0xff, 0xb3, 0x47),
@@ -28,9 +33,10 @@ const PALETTE: [[u8; 3]; 8] = [
 
 /// Seconds before its fuse runs out that a particle starts fading.
 const FADE_TIME: f32 = 0.4;
-const SHADOW_ALPHA: u8 = 90;
+const SHADOW_OPACITY: f32 = 90.0 / 255.0;
 /// Shadow offset as a fraction of the particle's size.
 const SHADOW_OFFSET: f32 = 0.08;
+const GLOSS_ALPHA: u8 = 110;
 /// Sprite cache bounds: at most 256 sprites of up to 128 px, about 17 MB.
 const MAX_SPRITES: usize = 256;
 const MAX_SPRITE_SIZE: f32 = 128.0;
@@ -46,6 +52,8 @@ pub struct Particle {
     pub tag: u16,
     /// Index into the swarm's shapes; 0 is the confetti rectangle.
     pub shape: u16,
+    /// A light highlight in the top left, like on a balloon.
+    pub gloss: bool,
     angle: f32,
     spin: f32,
     flip: f32,
@@ -71,6 +79,7 @@ impl Particle {
             fuse: f32::INFINITY,
             tag: 0,
             shape: 0,
+            gloss: false,
             angle: fastrand::f32() * TAU,
             spin: (fastrand::f32() - 0.5) * 12.0,
             flip: fastrand::f32() * TAU,
@@ -90,15 +99,15 @@ impl Particle {
         self.height = size;
     }
 
-    pub fn set_color(&mut self, [red, green, blue]: [u8; 3]) {
-        let [first, second, third] = bgr(red, green, blue);
-        self.color = Color::from_rgba8(first, second, third, 255);
+    pub fn set_color(&mut self, rgba: [u8; 4]) {
+        self.color = color(rgba);
     }
 
     /// A translucent copy drawn behind the particle, offset down and right.
-    pub fn set_shadow(&mut self, [red, green, blue]: [u8; 3]) {
-        let [first, second, third] = bgr(red, green, blue);
-        self.shadow = Some(Color::from_rgba8(first, second, third, SHADOW_ALPHA));
+    pub fn set_shadow(&mut self, rgba: [u8; 4]) {
+        let mut shadow = color(rgba);
+        shadow.apply_opacity(SHADOW_OPACITY);
+        self.shadow = Some(shadow);
     }
 
     /// Keeps the particle upright and flat, e.g. for balloons.
@@ -156,6 +165,7 @@ struct SpriteKey {
     height: u16,
     color: [u8; 4],
     shadow: Option<[u8; 4]>,
+    gloss: bool,
 }
 
 impl SpriteKey {
@@ -173,38 +183,68 @@ impl SpriteKey {
             height: px(particle.height),
             color: rgba(particle.color),
             shadow: particle.shadow.map(rgba),
+            gloss: particle.gloss,
         }
     }
 }
 
-/// A shape and its shadow rendered upright around `center`.
+/// Fills the particle's shadow, shape and gloss with `transform`, faded by `opacity`.
+fn fill_layers(
+    canvas: &mut PixmapMut,
+    particle: &Particle,
+    shape: &Path,
+    transform: Transform,
+    offset: f32,
+    opacity: f32,
+) {
+    let mut paint = Paint {
+        anti_alias: true,
+        ..Paint::default()
+    };
+    let mut fill = |path: &Path, mut color: Color, transform: Transform| {
+        color.apply_opacity(opacity);
+        paint.set_color(color);
+        canvas.fill_path(path, &paint, FillRule::Winding, transform, None);
+    };
+    if let Some(shadow) = particle.shadow {
+        fill(shape, shadow, transform.post_translate(offset, offset));
+    }
+    fill(shape, particle.color, transform);
+    if particle.gloss
+        && let Some(gloss) =
+            Rect::from_xywh(-0.3, -0.38, 0.14, 0.22).and_then(PathBuilder::from_oval)
+    {
+        fill(&gloss, color([255, 255, 255, GLOSS_ALPHA]), transform);
+    }
+}
+
+/// A shape with its shadow and gloss rendered upright around `center`.
 struct Sprite {
     pixmap: Pixmap,
     center: f32,
 }
 
 impl Sprite {
-    fn render(shape: &Path, key: SpriteKey, color: Color, shadow: Option<Color>) -> Option<Self> {
+    fn render(shape: &Path, key: SpriteKey, particle: &Particle) -> Option<Self> {
         let (width, height) = (f32::from(key.width), f32::from(key.height));
         let extent = width.max(height);
-        let offset = shadow.map_or(0.0, |_| (extent * SHADOW_OFFSET).max(1.0));
+        let offset = key
+            .shadow
+            .map_or(0.0, |_| (extent * SHADOW_OFFSET).max(1.0));
         let center = (extent / 2.0 + 1.0).ceil();
         // Fits in u32: extent is at most MAX_SPRITE_SIZE.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let side = (center * 2.0 + offset).ceil() as u32;
         let mut pixmap = Pixmap::new(side, side)?;
-        let mut paint = Paint {
-            anti_alias: true,
-            ..Paint::default()
-        };
         let transform = Transform::from_row(width, 0.0, 0.0, height, center, center);
-        if let Some(shadow) = shadow {
-            paint.set_color(shadow);
-            let shifted = transform.post_translate(offset, offset);
-            pixmap.fill_path(shape, &paint, FillRule::Winding, shifted, None);
-        }
-        paint.set_color(color);
-        pixmap.fill_path(shape, &paint, FillRule::Winding, transform, None);
+        fill_layers(
+            &mut pixmap.as_mut(),
+            particle,
+            shape,
+            transform,
+            offset,
+            1.0,
+        );
         Some(Self { pixmap, center })
     }
 }
@@ -240,10 +280,6 @@ impl Swarm {
 
     /// Draws the particles that are in view and returns the area they cover.
     pub fn draw(&self, canvas: &mut PixmapMut) -> Area {
-        let mut paint = Paint {
-            anti_alias: true,
-            ..Paint::default()
-        };
         #[allow(clippy::cast_precision_loss)] // screen sizes fit easily in f32
         let (canvas_width, canvas_height) = (canvas.width() as f32, canvas.height() as f32);
         let (mut left, mut top, mut right, mut bottom) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
@@ -291,16 +327,7 @@ impl Swarm {
             let height = particle.height * flip;
             let transform =
                 Transform::from_row(width * cos, width * sin, -height * sin, height * cos, x, y);
-            if let Some(mut shadow) = particle.shadow {
-                shadow.apply_opacity(fade);
-                paint.set_color(shadow);
-                let shifted = transform.post_translate(offset, offset);
-                canvas.fill_path(shape, &paint, FillRule::Winding, shifted, None);
-            }
-            let mut color = particle.color;
-            color.apply_opacity(fade);
-            paint.set_color(color);
-            canvas.fill_path(shape, &paint, FillRule::Winding, transform, None);
+            fill_layers(canvas, particle, shape, transform, offset, fade);
         }
         // Clamped to the canvas first, so the casts can't truncate or wrap.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -328,7 +355,7 @@ impl Swarm {
             if sprites.len() >= MAX_SPRITES {
                 return false;
             }
-            let Some(sprite) = Sprite::render(shape, key, particle.color, particle.shadow) else {
+            let Some(sprite) = Sprite::render(shape, key, particle) else {
                 return false;
             };
             sprites.insert(key, sprite);
