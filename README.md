@@ -218,7 +218,7 @@ The effect ends when no particles are left. An effect that is still running afte
 | `shadow` | none | `"#rrggbb"` or `"#rrggbbaa"`: a translucent copy behind it, so light particles show on light backgrounds |
 | `spin` | `true` | `false` keeps it upright and flat |
 | `wobble` | `0` | Sideways sway in pixels |
-| `gloss` | `false` | `true` adds a light highlight in the top left, like on a balloon |
+| `gloss` | none | `true` for a light oval in the top left, clipped to the shape, or `#{ x, y, size, color, shape }` to change it: `x`, `y` from `-0.5` to `0.5`, `size` a fraction of the shape, `shape` like the particle's |
 | `tag` | `""` | Any string, handed back to `expire` |
 
 ### Shapes from SVG
