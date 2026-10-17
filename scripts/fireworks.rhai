@@ -12,33 +12,63 @@ fn start(ctx) {
     ctx.gravity = ctx.height * 0.5;
     let rockets = 6;
     for i in 0..rockets {
+        // Parked above the screen, where nothing is drawn or removed, until its fuse launches the rocket.
         ctx.emit(#{
-            x: ctx.width * (0.15 + 0.7 * i / (rockets - 1)),
+            x: ctx.width * (0.25 + 0.5 * rand()),
+            y: -ctx.height * 2.0,
+            fuse: i * 0.35 + rand() * 0.25,
+            size: 1,
+            tag: "launch",
+        });
+    }
+}
+
+// Launch speed that climbs `rise` pixels in `fuse` seconds, with gravity and drag.
+fn launch_speed(ctx, rise, fuse) {
+    let k = ctx.drag;
+    let g = ctx.gravity;
+    g / k - (rise + g * fuse / k) * k / (1.0 - (-k * fuse).exp())
+}
+
+fn expire(ctx, p) {
+    if p.tag == "launch" {
+        let fuse = 1.0 + rand() * 0.4;
+        let rise = ctx.height * (0.6 + rand() * 0.25);
+        ctx.emit(#{
+            x: p.x,
             y: ctx.height,
-            vx: (rand() - 0.5) * 80.0,
-            vy: -ctx.height * (0.9 + rand() * 0.3),
-            fuse: 0.8 + rand() * 0.7,
+            vx: (rand() - 0.5) * 40.0,
+            vy: launch_speed(ctx, rise, fuse),
+            fuse: fuse,
             shape: ROCKET,
             size: 28,
             color: "#dddddd",
             spin: false,
             tag: pick(KINDS),
         });
+        return;
     }
-}
-
-fn expire(ctx, p) {
     let color = pick(COLORS);
-    let sparks = ctx.count / 6;
+    let scale = 0.6 + rand() * 0.8;
+    let sparks = (ctx.count / 6 * scale).to_int();
     switch p.tag {
-        "burst" => ctx.burst(p.x, p.y, sparks, color),
-        "ring" => ring(ctx, p, sparks, color),
-        "heart" => heart(ctx, p, sparks, color),
+        "burst" => burst(ctx, p, sparks, scale, color),
+        "ring" => ring(ctx, p, sparks, scale, color),
+        "heart" => heart(ctx, p, sparks, scale, color),
     }
 }
 
-fn ring(ctx, p, sparks, color) {
-    let speed = ctx.height * 0.3;
+fn burst(ctx, p, sparks, scale, color) {
+    let speed = ctx.height * 0.35 * scale;
+    for i in 0..sparks {
+        let angle = 2.0 * PI() * rand();
+        let v = speed * (0.3 + rand() * 0.7);
+        spark(ctx, p, angle.cos() * v, angle.sin() * v, color);
+    }
+}
+
+fn ring(ctx, p, sparks, scale, color) {
+    let speed = ctx.height * 0.3 * scale;
     for i in 0..sparks {
         let angle = 2.0 * PI() * i / sparks;
         spark(ctx, p, angle.cos() * speed, angle.sin() * speed, color);
@@ -46,8 +76,8 @@ fn ring(ctx, p, sparks, color) {
 }
 
 // The classic parametric heart: x = 16 sin³t, y = 13 cos t - 5 cos 2t - 2 cos 3t - cos 4t.
-fn heart(ctx, p, sparks, color) {
-    let speed = ctx.height * 0.02;
+fn heart(ctx, p, sparks, scale, color) {
+    let speed = ctx.height * 0.02 * scale;
     for i in 0..sparks {
         let t = 2.0 * PI() * i / sparks;
         let x = 16.0 * t.sin() ** 3;
