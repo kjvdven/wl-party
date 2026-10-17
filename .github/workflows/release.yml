@@ -45,7 +45,7 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           merge-multiple: true
-      - uses: softprops/action-gh-release@v3
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: wl-party-*
           generate_release_notes: true
