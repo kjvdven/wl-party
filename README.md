@@ -212,10 +212,11 @@ The effect ends when no particles are left. An effect that is still running afte
 | `fuse` | never | Seconds until it fades, expires and calls `expire` |
 | `shape` | `"rect"` | `"rect"`, `"circle"` or SVG path data |
 | `size` | random confetti / `16` | Pixels, 1-512 |
-| `color` | random confetti color | `"#rrggbb"` |
+| `color` | random confetti color | `"#rrggbb"`, or `"#rrggbbaa"` to make it translucent |
 | `shadow` | none | `"#rrggbb"`: a translucent copy behind it, so light particles show on light backgrounds |
 | `spin` | `true` | `false` keeps it upright and flat |
 | `wobble` | `0` | Sideways sway in pixels |
+| `gloss` | `false` | `true` adds a light highlight in the top left, like on a balloon |
 | `tag` | `""` | Any string, handed back to `expire` |
 
 ### Shapes from SVG

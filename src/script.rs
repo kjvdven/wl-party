@@ -282,9 +282,11 @@ impl Ctx {
         if let Some(wobble) = number("wobble") {
             particle.set_wobble(wobble.clamp(0.0, MAX_WOBBLE));
         }
-        if spec.get("spin").and_then(|spin| spin.as_bool().ok()) == Some(false) {
+        let flag = |key: &str| spec.get(key).and_then(|value| value.as_bool().ok());
+        if flag("spin") == Some(false) {
             particle.stop_spin();
         }
+        particle.gloss = flag("gloss") == Some(true);
         if let Some(color) = text("color") {
             particle.set_color(parse_color(&color)?);
         }
@@ -303,7 +305,7 @@ impl Ctx {
     }
 
     /// Sparks flying out in all directions from `(x, y)`, fading out within ~1.6 s.
-    fn burst(&mut self, x: FLOAT, y: FLOAT, count: INT, color: Option<[u8; 3]>) {
+    fn burst(&mut self, x: FLOAT, y: FLOAT, count: INT, color: Option<[u8; 4]>) {
         let count = usize::try_from(count).unwrap_or(0).min(MAX_PARTICLES);
         let speed = self.size.height * 0.35;
         let mut state = self.state.borrow_mut();
@@ -320,17 +322,23 @@ impl Ctx {
     }
 }
 
-/// `#rrggbb` to `[r, g, b]`.
-fn parse_color(color: &str) -> Result<[u8; 3], Box<EvalAltResult>> {
+/// `#rrggbb` or `#rrggbbaa` to `[r, g, b, a]`.
+fn parse_color(color: &str) -> Result<[u8; 4], Box<EvalAltResult>> {
     color
         .strip_prefix('#')
-        .filter(|hex| hex.len() == 6 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()))
-        .and_then(|hex| u32::from_str_radix(hex, 16).ok())
-        .map(|value| {
-            let [_, red, green, blue] = value.to_be_bytes();
-            [red, green, blue]
+        .filter(|hex| {
+            matches!(hex.len(), 6 | 8) && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
         })
-        .ok_or_else(|| format!("invalid color '{color}', expected #rrggbb").into())
+        .and_then(|hex| {
+            let value = u32::from_str_radix(hex, 16).ok()?;
+            Some(if hex.len() == 6 {
+                value << 8 | 0xff
+            } else {
+                value
+            })
+        })
+        .map(u32::to_be_bytes)
+        .ok_or_else(|| format!("invalid color '{color}', expected #rrggbb or #rrggbbaa").into())
 }
 
 fn to_f32(value: &Dynamic) -> Option<f32> {
@@ -450,16 +458,18 @@ mod tests {
     }
 
     #[test]
-    fn parse_color_accepts_only_rrggbb() {
-        assert_eq!(parse_color("#ff4d6d").unwrap(), [0xff, 0x4d, 0x6d]);
-        assert_eq!(parse_color("#FFFFFF").unwrap(), [0xff, 0xff, 0xff]);
+    fn parse_color_accepts_rrggbb_and_rrggbbaa() {
+        assert_eq!(parse_color("#ff4d6d").unwrap(), [0xff, 0x4d, 0x6d, 0xff]);
+        assert_eq!(parse_color("#FFFFFF").unwrap(), [0xff, 0xff, 0xff, 0xff]);
+        assert_eq!(parse_color("#ff4d6d80").unwrap(), [0xff, 0x4d, 0x6d, 0x80]);
         for bad in [
             "red",
             "#fff",
             "ff4d6d",
             "#gggggg",
             "#+fffff",
-            "#ff4d6d00",
+            "#ff4d6d0",
+            "#ff4d6d000",
             "#ffé4d",
         ] {
             assert!(parse_color(bad).is_err(), "{bad:?} should be rejected");

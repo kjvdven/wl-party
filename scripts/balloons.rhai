@@ -1,7 +1,7 @@
 // Balloons float up from the bottom
 
 const BALLOON = "M0 -12 C7 -12 10 -6 10 -1 C10 6 4 11 1 12 L2 14 L-2 14 L-1 12 C-4 11 -10 6 -10 -1 C-10 -6 -7 -12 0 -12 Z";
-const COLORS = ["#ff4d6d", "#ffb347", "#ffe066", "#5ce1e6", "#7b61ff", "#3ddc84", "#ff7ac8"];
+const COLORS = ["#ff4d6dd0", "#ffb347d0", "#ffe066d0", "#5ce1e6d0", "#7b61ffd0", "#3ddc84d0", "#ff7ac8d0"];
 
 fn start(ctx) {
     ctx.gravity = -ctx.height * 0.05;
@@ -17,6 +17,7 @@ fn start(ctx) {
             color: COLORS[(rand() * COLORS.len()).to_int()],
             spin: false,
             wobble: 12.0 + rand() * 8.0,
+            gloss: true,
         });
     }
 }
