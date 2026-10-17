@@ -13,7 +13,7 @@ use rhai::{
 use tiny_skia::{Path as Shape, PixmapMut};
 
 use crate::effect::{Area, Effect, Size};
-use crate::particle::{Particle, Swarm};
+use crate::particle::{Gloss, Particle, Swarm};
 use crate::shape;
 
 /// Hard cap on live particles, whatever a script asks for.
@@ -264,10 +264,7 @@ impl Ctx {
     #[allow(clippy::needless_pass_by_value)]
     fn emit(&mut self, spec: Map) -> Result<(), Box<EvalAltResult>> {
         let number = |key: &str| spec.get(key).and_then(to_f32);
-        let text = |key: &str| {
-            spec.get(key)
-                .and_then(|value| value.clone().into_immutable_string().ok())
-        };
+        let text = |key: &str| spec.get(key).and_then(to_text);
         let mut particle = Particle::new(
             number("x").unwrap_or(0.0),
             number("y").unwrap_or(0.0),
@@ -286,7 +283,6 @@ impl Ctx {
         if flag("spin") == Some(false) {
             particle.stop_spin();
         }
-        particle.gloss = flag("gloss") == Some(true);
         if let Some(color) = text("color") {
             particle.set_color(parse_color(&color)?);
         }
@@ -299,6 +295,9 @@ impl Ctx {
         }
         if let Some(tag) = text("tag") {
             particle.tag = state.intern(tag);
+        }
+        if let Some(gloss) = spec.get("gloss") {
+            particle.gloss = parse_gloss(gloss, &mut state)?;
         }
         state.push(particle);
         Ok(())
@@ -339,6 +338,38 @@ fn parse_color(color: &str) -> Result<[u8; 4], Box<EvalAltResult>> {
         })
         .map(u32::to_be_bytes)
         .ok_or_else(|| format!("invalid color '{color}', expected #rrggbb or #rrggbbaa").into())
+}
+
+/// `true` for the default gloss, or a map overriding its `x`, `y`, `size`, `color` and `shape`.
+fn parse_gloss(value: &Dynamic, state: &mut State) -> Result<Option<Gloss>, Box<EvalAltResult>> {
+    if let Ok(on) = value.as_bool() {
+        return Ok(on.then(Gloss::default));
+    }
+    let Some(map) = value.read_lock::<Map>() else {
+        return Ok(None);
+    };
+    let number = |key: &str| map.get(key).and_then(to_f32);
+    let mut gloss = Gloss::default();
+    if let Some(x) = number("x") {
+        gloss.x = x.clamp(-0.5, 0.5);
+    }
+    if let Some(y) = number("y") {
+        gloss.y = y.clamp(-0.5, 0.5);
+    }
+    if let Some(size) = number("size") {
+        gloss.size = size.clamp(0.0, 1.0);
+    }
+    if let Some(color) = map.get("color").and_then(to_text) {
+        gloss.color = parse_color(&color)?;
+    }
+    if let Some(shape) = map.get("shape").and_then(to_text) {
+        gloss.shape = Some(state.shape(shape)?);
+    }
+    Ok(Some(gloss))
+}
+
+fn to_text(value: &Dynamic) -> Option<ImmutableString> {
+    value.clone().into_immutable_string().ok()
 }
 
 fn to_f32(value: &Dynamic) -> Option<f32> {
@@ -476,6 +507,36 @@ mod tests {
         }
     }
 
+    fn empty_state() -> State {
+        State {
+            spawned: Vec::new(),
+            tags: vec![ImmutableString::new()],
+            shape_keys: Vec::new(),
+            new_shapes: Vec::new(),
+            gravity: 0.0,
+            drag: 0.0,
+        }
+    }
+
+    #[test]
+    fn parse_gloss_takes_a_flag_or_a_map() {
+        let mut state = empty_state();
+        let mut gloss =
+            |source: &str| parse_gloss(&Engine::new().eval::<Dynamic>(source).unwrap(), &mut state);
+        assert!(gloss("false").unwrap().is_none());
+        assert_eq!(gloss("true").unwrap().unwrap().x, Gloss::default().x);
+        let custom = gloss(r##"#{ x: -2.0, size: 0.5, color: "#ff000080" }"##)
+            .unwrap()
+            .unwrap();
+        assert_eq!(custom.x, -0.5, "clamped to the shape");
+        assert_eq!(custom.y, Gloss::default().y);
+        assert_eq!(custom.size, 0.5);
+        assert_eq!(custom.color, [0xff, 0, 0, 0x80]);
+        assert!(gloss(r#"#{ color: "white" }"#).is_err());
+        let circle = gloss(r#"#{ shape: "circle" }"#).unwrap().unwrap();
+        assert_eq!(circle.shape, Some(0), "the first registered shape");
+    }
+
     #[test]
     fn particles_are_capped() {
         let effect =
@@ -497,14 +558,7 @@ mod tests {
 
     #[test]
     fn tags_beyond_the_cap_fall_back_to_the_empty_tag() {
-        let mut state = State {
-            spawned: Vec::new(),
-            tags: vec![ImmutableString::new()],
-            shape_keys: Vec::new(),
-            new_shapes: Vec::new(),
-            gravity: 0.0,
-            drag: 0.0,
-        };
+        let mut state = empty_state();
         for i in 1..MAX_TAGS {
             assert_eq!(usize::from(state.intern(i.to_string().into())), i);
         }

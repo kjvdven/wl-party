@@ -1,10 +1,11 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::f32::consts::TAU;
+use std::sync::LazyLock;
 
 use tiny_skia::{
-    Color, FillRule, FilterQuality, Paint, Path, PathBuilder, Pixmap, PixmapMut, PixmapPaint, Rect,
-    Transform,
+    Color, FillRule, FilterQuality, Mask, Paint, Path, PathBuilder, Pixmap, PixmapMut, PixmapPaint,
+    Rect, Transform,
 };
 
 use crate::effect::{Area, Size};
@@ -36,10 +37,41 @@ const FADE_TIME: f32 = 0.4;
 const SHADOW_OPACITY: f32 = 90.0 / 255.0;
 /// Shadow offset as a fraction of the particle's size.
 const SHADOW_OFFSET: f32 = 0.08;
-const GLOSS_ALPHA: u8 = 110;
 /// Sprite cache bounds: at most 256 sprites of up to 128 px, about 17 MB.
 const MAX_SPRITES: usize = 256;
 const MAX_SPRITE_SIZE: f32 = 128.0;
+
+/// The default gloss shape: an upright oval, a bit narrower than tall.
+static OVAL: LazyLock<Path> = LazyLock::new(|| {
+    let bounds = Rect::from_xywh(-0.32, -0.5, 0.64, 1.0).expect("valid oval bounds");
+    PathBuilder::from_oval(bounds).expect("valid oval")
+});
+
+/// A light highlight on the shape, like on a balloon, clipped to the shape.
+#[derive(Clone, Copy)]
+pub struct Gloss {
+    /// Center, from -0.5 (left, top) to 0.5 (right, bottom) of the shape.
+    pub x: f32,
+    pub y: f32,
+    /// Size as a fraction of the shape.
+    pub size: f32,
+    /// `[r, g, b, a]`.
+    pub color: [u8; 4],
+    /// Index into the swarm's shapes; `None` is the oval.
+    pub shape: Option<u16>,
+}
+
+impl Default for Gloss {
+    fn default() -> Self {
+        Self {
+            x: -0.23,
+            y: -0.27,
+            size: 0.22,
+            color: [255, 255, 255, 110],
+            shape: None,
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 pub struct Particle {
@@ -52,8 +84,7 @@ pub struct Particle {
     pub tag: u16,
     /// Index into the swarm's shapes; 0 is the confetti rectangle.
     pub shape: u16,
-    /// A light highlight in the top left, like on a balloon.
-    pub gloss: bool,
+    pub gloss: Option<Gloss>,
     angle: f32,
     spin: f32,
     flip: f32,
@@ -79,7 +110,7 @@ impl Particle {
             fuse: f32::INFINITY,
             tag: 0,
             shape: 0,
-            gloss: false,
+            gloss: None,
             angle: fastrand::f32() * TAU,
             spin: (fastrand::f32() - 0.5) * 12.0,
             flip: fastrand::f32() * TAU,
@@ -165,7 +196,8 @@ struct SpriteKey {
     height: u16,
     color: [u8; 4],
     shadow: Option<[u8; 4]>,
-    gloss: bool,
+    /// Position and size as bits, since floats don't hash.
+    gloss: Option<([u32; 3], [u8; 4], Option<u16>)>,
 }
 
 impl SpriteKey {
@@ -174,7 +206,7 @@ impl SpriteKey {
             let color = color.to_color_u8();
             [color.red(), color.green(), color.blue(), color.alpha()]
         };
-        // Sizes are capped at MAX_SPRITE_SIZE before a key is made, so they fit u16.
+        // Sizes are capped at 512 by `emit`, so they fit u16.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let px = |size: f32| size.round().max(1.0) as u16;
         Self {
@@ -183,16 +215,24 @@ impl SpriteKey {
             height: px(particle.height),
             color: rgba(particle.color),
             shadow: particle.shadow.map(rgba),
-            gloss: particle.gloss,
+            gloss: particle.gloss.map(|gloss| {
+                let bits = [gloss.x, gloss.y, gloss.size].map(f32::to_bits);
+                (bits, gloss.color, gloss.shape)
+            }),
         }
     }
+}
+
+/// The shape at `index`, or the unit square if there is none.
+fn shape_at(shapes: &[Path], index: u16) -> &Path {
+    shapes.get(usize::from(index)).unwrap_or(&shapes[0])
 }
 
 /// Fills the particle's shadow, shape and gloss with `transform`, faded by `opacity`.
 fn fill_layers(
     canvas: &mut PixmapMut,
     particle: &Particle,
-    shape: &Path,
+    shapes: &[Path],
     transform: Transform,
     offset: f32,
     opacity: f32,
@@ -201,20 +241,34 @@ fn fill_layers(
         anti_alias: true,
         ..Paint::default()
     };
-    let mut fill = |path: &Path, mut color: Color, transform: Transform| {
+    let (width, height) = (canvas.width(), canvas.height());
+    let shape = shape_at(shapes, particle.shape);
+    let mut fill = |path: &Path, mut color: Color, transform: Transform, clip: Option<&Mask>| {
         color.apply_opacity(opacity);
         paint.set_color(color);
-        canvas.fill_path(path, &paint, FillRule::Winding, transform, None);
+        canvas.fill_path(path, &paint, FillRule::Winding, transform, clip);
     };
     if let Some(shadow) = particle.shadow {
-        fill(shape, shadow, transform.post_translate(offset, offset));
+        fill(
+            shape,
+            shadow,
+            transform.post_translate(offset, offset),
+            None,
+        );
     }
-    fill(shape, particle.color, transform);
-    if particle.gloss
-        && let Some(gloss) =
-            Rect::from_xywh(-0.3, -0.38, 0.14, 0.22).and_then(PathBuilder::from_oval)
+    fill(shape, particle.color, transform, None);
+    if let Some(gloss) = particle.gloss
+        && let Some(mut clip) = Mask::new(width, height)
     {
-        fill(&gloss, color([255, 255, 255, GLOSS_ALPHA]), transform);
+        clip.fill_path(shape, FillRule::Winding, true, transform);
+        let path = gloss.shape.map_or(&*OVAL, |index| shape_at(shapes, index));
+        let place = Transform::from_row(gloss.size, 0.0, 0.0, gloss.size, gloss.x, gloss.y);
+        fill(
+            path,
+            color(gloss.color),
+            transform.pre_concat(place),
+            Some(&clip),
+        );
     }
 }
 
@@ -225,14 +279,14 @@ struct Sprite {
 }
 
 impl Sprite {
-    fn render(shape: &Path, key: SpriteKey, particle: &Particle) -> Option<Self> {
+    fn render(shapes: &[Path], key: SpriteKey, particle: &Particle) -> Option<Self> {
         let (width, height) = (f32::from(key.width), f32::from(key.height));
         let extent = width.max(height);
         let offset = key
             .shadow
             .map_or(0.0, |_| (extent * SHADOW_OFFSET).max(1.0));
         let center = (extent / 2.0 + 1.0).ceil();
-        // Fits in u32: extent is at most MAX_SPRITE_SIZE.
+        // Fits in u32: extent is at most 512.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let side = (center * 2.0 + offset).ceil() as u32;
         let mut pixmap = Pixmap::new(side, side)?;
@@ -240,7 +294,7 @@ impl Sprite {
         fill_layers(
             &mut pixmap.as_mut(),
             particle,
-            shape,
+            shapes,
             transform,
             offset,
             1.0,
@@ -310,14 +364,10 @@ impl Swarm {
             let (sin, cos) = angle.sin_cos();
             let flip = particle.flip.cos();
             let fade = particle.fuse / FADE_TIME;
-            let shape = self
-                .shapes
-                .get(usize::from(particle.shape))
-                .unwrap_or(&self.shapes[0]);
-            if particle.shape != 0 && extent <= MAX_SPRITE_SIZE {
+            if particle.shape != 0 || particle.gloss.is_some() {
                 // rotate -> squash by flip -> translate, around the sprite's center.
                 let transform = Transform::from_row(cos, sin, -sin * flip, cos * flip, x, y);
-                if self.draw_sprite(canvas, particle, shape, transform, fade) {
+                if self.draw_sprite(canvas, particle, transform, fade) {
                     continue;
                 }
             }
@@ -327,7 +377,7 @@ impl Swarm {
             let height = particle.height * flip;
             let transform =
                 Transform::from_row(width * cos, width * sin, -height * sin, height * cos, x, y);
-            fill_layers(canvas, particle, shape, transform, offset, fade);
+            fill_layers(canvas, particle, &self.shapes, transform, offset, fade);
         }
         // Clamped to the canvas first, so the casts can't truncate or wrap.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -340,27 +390,36 @@ impl Swarm {
         }
     }
 
-    /// Draws the particle from its cached sprite; `false` if the cache is full.
+    /// Draws the particle from a sprite, cached when it fits; `false` if it gets none.
+    /// Gloss always gets one: its clip mask would otherwise cover the whole canvas.
     fn draw_sprite(
         &self,
         canvas: &mut PixmapMut,
         particle: &Particle,
-        shape: &Path,
         transform: Transform,
         fade: f32,
     ) -> bool {
         let key = SpriteKey::of(particle);
         let mut sprites = self.sprites.borrow_mut();
-        if !sprites.contains_key(&key) {
-            if sprites.len() >= MAX_SPRITES {
+        let one_off;
+        let sprite = if sprites.contains_key(&key) {
+            &sprites[&key]
+        } else {
+            let cacheable = particle.width.max(particle.height) <= MAX_SPRITE_SIZE
+                && sprites.len() < MAX_SPRITES;
+            if !cacheable && particle.gloss.is_none() {
                 return false;
             }
-            let Some(sprite) = Sprite::render(shape, key, particle) else {
+            let Some(sprite) = Sprite::render(&self.shapes, key, particle) else {
                 return false;
             };
-            sprites.insert(key, sprite);
-        }
-        let sprite = &sprites[&key];
+            if cacheable {
+                &*sprites.entry(key).or_insert(sprite)
+            } else {
+                one_off = sprite;
+                &one_off
+            }
+        };
         let paint = PixmapPaint {
             opacity: fade.clamp(0.0, 1.0),
             quality: FilterQuality::Bilinear,
