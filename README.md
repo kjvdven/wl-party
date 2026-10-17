@@ -6,6 +6,8 @@ everything, never steals focus or clicks, and exits when the effect is done.
 Effects are built in (Rust) or written as small [Rhai](https://rhai.rs) scripts that
 load at runtime, no recompiling needed.
 
+https://github.com/user-attachments/assets/3dc40133-51d0-4531-ae97-93755fe1d9f3
+
 ## Requirements
 
 - A compositor with `zwlr_layer_shell_v1`: niri, Sway, Hyprland, river, KDE, and others.
