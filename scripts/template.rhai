@@ -19,7 +19,8 @@
 //       shadow                "#rrggbb" or "#rrggbbaa", a soft copy behind it so it shows on light backgrounds
 //       spin                  false keeps it upright
 //       wobble                sideways sway in pixels
-//       gloss                 true adds a light highlight in the top left, like on a balloon
+//       gloss                 true for a light oval in the top left, clipped to the shape,
+//                             or #{ x, y, size, color, shape } with x, y from -0.5 to 0.5
 //       tag                   any string, handed back to expire
 //   ctx.burst(x, y, n)        n sparks in all directions, optional 4th argument: color
 //   rand()                    random number between 0 and 1
